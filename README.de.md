@@ -7,6 +7,7 @@
 DropStopNShop macht aus einem Raspberry Pi und einem beliebigen Monitor eine Anzeige für
 Preislisten, Angebote und Hinweise. Die Inhalte sind einfach Dateien in einem freigegebenen Ordner:
 - **PDFs** aus LibreOffice, Canva, Word, PowerPoint, …
+- **PowerPoint-Dateien** (`.pptx`, auch LibreOffice Impress `.odp`)
 - **Bilder**
 - **Videos**
 
@@ -20,7 +21,11 @@ Leute ohne Technikinteresse, gebaut für die nächsten 10 Jahre und sparsam im S
 
 - **Der Ordner ist die Abspielliste:** Dateien laufen in der Reihenfolge ihrer Namen (`01_…`,
   `02_…`). Wer eine Datei löscht, nimmt sie vom Bildschirm.
-- **PDF-Seiten werden Folien:** Ein PDF mit 5 Seiten ergibt 5 Folien.
+- **PDF-Seiten werden Folien:** Ein PDF mit 5 Seiten ergibt 5 Folien. PowerPoint-Dateien genauso.
+- **Keine schwarzen Ränder:** Hat eine Folie nicht das Format des Bildschirms (ein A4-Blatt, ein
+  Handyfoto), werden die Ränder mit den Farben an ihrem Rand aufgefüllt. Jede Datei wird nur
+  einmal aufbereitet und wiederverwendet, bis sie sich ändert. Abschaltbar; Videos bleiben, wie
+  sie sind.
 - **Angebote laufen von selbst ab:** `bis 30.11.2026` oder `until 2026-11-30` in den Dateinamen
   schreiben.
 - **Läuft auch offline:** Ein USB-Stick mit dem Ordner hat Vorrang (Messe, kein Netz). Ist der
@@ -58,7 +63,9 @@ Laufwerk da ist: [Netzlaufwerk einbinden](docs/netzlaufwerk.md).
 ## So funktioniert es
 
 - **Abgleich:** Ein systemd-Timer holt alle 3 Minuten die Dateien (USB-Stick vor
-  Netzwerkordner). PDF-Seiten werden dabei zu Bildern. Geschrieben wird nur, wenn sich etwas
+  Netzwerkordner). PowerPoint-Dateien wandelt LibreOffice in PDFs um, PDF-Seiten werden zu
+  Bildern, und die Ränder werden auf das Format des Bildschirms aufgefüllt. Jede Datei wird nur
+  einmal aufbereitet (`data/cache/`), danach geht es schnell. Geschrieben wird nur, wenn sich etwas
   geändert hat. Ein neuer Stand wird erst vollständig geschrieben und dann atomar umgeschaltet.
 - **Anzeige:** Nach dem Einschalten startet der systemd-Dienst `dropstopnshop-kiosk`
   [cage](https://github.com/cage-kiosk/cage) mit Chromium im Kiosk-Modus auf `tty1`. Chromium
@@ -96,7 +103,8 @@ von überall per SSH, ohne Ports am Router zu öffnen.
 ## Vorschau unter Linux
 
 Die Diashow lässt sich ohne Pi mit eigenen Dateien testen. Dafür braucht es `pdftoppm`: unter
-Arch das Paket `poppler`, unter Debian/Ubuntu `poppler-utils`.
+Arch das Paket `poppler`, unter Debian/Ubuntu `poppler-utils`. Für das Auffüllen der Ränder
+braucht es Pillow (`python-pillow` / `python3-pil`), für PowerPoint-Dateien LibreOffice.
 
 ```bash
 bash setup.sh --preview pfad/zum/ordner
@@ -108,6 +116,9 @@ Die Seite öffnet sich im Browser und übernimmt Änderungen im Ordner, bis du S
 
 - **Datum ohne Netz:** Der Pi hat keine Uhr-Batterie. Ohne Netz kennt er das Datum eventuell
   nicht genau, dann kann ein abgelaufenes Angebot noch erscheinen.
+- **PowerPoint:** Die Folien zeichnet LibreOffice, sie können also etwas anders aussehen als in
+  PowerPoint, vor allem bei Schriften, die der Pi nicht hat. Animationen und Übergänge gibt es
+  nicht. Sieht eine Folie falsch aus, sie stattdessen als PDF speichern: Das ist immer exakt.
 - **Videos:** Der Pi 5 dekodiert H.264 in Software. Full HD (1080p) läuft, 4K nicht.
 - **USB-Sticks:** müssen FAT32 oder exFAT formatiert sein. So kommen sie aus der Packung.
 

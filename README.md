@@ -7,6 +7,7 @@
 DropStopNShop turns a Raspberry Pi and any monitor into a display for price lists, offers and
 announcements. The content is simply files in a shared folder:
 - **PDFs** made with LibreOffice, Canva, Word, PowerPoint, …
+- **PowerPoint files** (`.pptx`, also LibreOffice Impress `.odp`)
 - **Images**
 - **Videos**
 
@@ -20,7 +21,10 @@ who don't care about technology, built to still work in 10 years, and frugal wit
 
 - **The folder is the playlist:** files play in name order (`01_…`, `02_…`). Delete a file and
   it's gone from the screen.
-- **PDF pages become slides:** a 5-page PDF gives 5 slides.
+- **PDF pages become slides:** a 5-page PDF gives 5 slides. PowerPoint files work the same way.
+- **No black bars:** a slide that doesn't have the shape of the screen (an A4 page, a phone
+  photo) gets its sides filled with the colours at its edge. Each file is prepared once and
+  reused until it changes. Can be switched off; videos are left as they are.
 - **Offers expire by themselves:** put `until 2026-11-30` or `bis 30.11.2026` in the file name.
 - **Works offline:** a USB stick with the folder takes priority (trade fairs, no network). If the
   network folder is unreachable, the last content keeps playing.
@@ -59,7 +63,7 @@ the folder a permanent drive on the shop PC, see [network drive](docs/network-dr
 ```
 ┌──────────────┐  every 3 min   ┌──────────────────────────────┐
 │ USB stick    │ ─────────────▶ │ dropstopnshop-sync           │
-│  or SMB share│   (USB wins)   │ PDF → PNG, copy images/videos│
+│  or SMB share│   (USB wins)   │ PDF/PPTX → PNG, fill sides   │
 └──────────────┘                │ → ~/dropstopnshop/data/      │
                                 └──────────────┬───────────────┘
                                                │ playlist.js
@@ -70,7 +74,9 @@ the folder a permanent drive on the shop PC, see [network drive](docs/network-dr
 ```
 
 - **Sync:** A systemd timer runs the sync job every 3 minutes. It only writes when something
-  changed. A new state is written completely first and then switched over atomically, so a power
+  changed. PowerPoint files are converted to PDF with LibreOffice, PDF pages become images, and
+  the sides of slides are filled to the shape of the screen. Each file is prepared once into
+  `data/cache/` and reused from there, so only new or changed files take time. A new state is written completely first and then switched over atomically, so a power
   cut always leaves a complete state behind.
 - **Display:** After power-on, the systemd service `dropstopnshop-kiosk` starts
   [cage](https://github.com/cage-kiosk/cage) with Chromium in kiosk mode on `tty1`. It shows a
@@ -88,9 +94,10 @@ in the current directory, e.g. `~/dropstopnshop`. You can edit everything there 
 | `~/dropstopnshop/index.html` | the slideshow page |
 | `~/dropstopnshop/dropstopnshop-sync` | the sync job |
 | `~/dropstopnshop/kiosk.sh` | starts the browser |
+| `~/dropstopnshop/fill-sides` | fills the sides of slides to the shape of the screen |
 | `~/dropstopnshop/setup.sh` | a copy of the installer |
-| `~/dropstopnshop/config` | language, folder name, share path, seconds per slide, render width |
-| `~/dropstopnshop/data/` | prepared slides (`state-…`, symlink `current`), written by the sync job |
+| `~/dropstopnshop/config` | language, folder name, share path, seconds per slide, screen size, fill sides |
+| `~/dropstopnshop/data/` | prepared slides (`state-…`, symlink `current`, `cache/`), written by the sync job |
 | `/etc/dropstopnshop/share-credentials` | username and password for the share (root only) |
 | `/etc/dropstopnshop/location` | where the install folder is |
 
@@ -116,7 +123,8 @@ the Pi via SSH from anywhere, without opening ports on the router.
 ## Preview on a Linux desktop
 
 Try the slideshow with your own files, without a Pi. It needs `pdftoppm`: install `poppler` on
-Arch, `poppler-utils` on Debian/Ubuntu.
+Arch, `poppler-utils` on Debian/Ubuntu. Filling the sides needs Pillow (`python-pillow` /
+`python3-pil`), PowerPoint files need LibreOffice.
 
 ```bash
 bash setup.sh --preview path/to/folder
@@ -128,6 +136,9 @@ The page opens in your browser and picks up changes to the folder until you pres
 
 - **Dates offline:** The Pi has no clock battery. Without a network it may not know the exact
   date, so an expired offer can show up again.
+- **PowerPoint:** LibreOffice draws the slides, so they can look slightly different from
+  PowerPoint, especially with fonts the Pi doesn't have. Animations and transitions are not
+  shown. If a slide looks wrong, save it as a PDF instead: that is always exact.
 - **Videos:** The Pi 5 decodes H.264 in software. Full HD (1080p) is fine, 4K is not.
 - **USB sticks:** must be formatted FAT32 or exFAT. That is how they come out of the box.
 

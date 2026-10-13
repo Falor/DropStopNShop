@@ -59,10 +59,10 @@ write_files() {
 const DATA = 'data/';
 const TEXT = {
   de: { title: 'Keine Inhalte gefunden', folder: 'Bildschirm',
-        files: ['PDF-Dateien, Bilder (JPG, PNG) oder Videos (MP4) in den Ordner „', '“ legen.'],
+        files: ['PDF- oder PowerPoint-Dateien, Bilder (JPG, PNG) oder Videos (MP4) in den Ordner „', '“ legen.'],
         note: 'Die Anzeige holt sie sich innerhalb weniger Minuten von selbst.' },
   en: { title: 'No content found', folder: 'Display',
-        files: ['Put PDF files, images (JPG, PNG) or videos (MP4) into the folder “', '”.'],
+        files: ['Put PDF or PowerPoint files, images (JPG, PNG) or videos (MP4) into the folder “', '”.'],
         note: 'The display picks them up within a few minutes.' },
 };
 let show = null, index = -1, current = null, timer = null;
@@ -153,9 +153,13 @@ EOF
 # Folder rules:
 #   - order = file name (01_…, 02_…); subfolders are ignored (e.g. "Archive")
 #   - PDF: every page becomes a slide; images: jpg, png, webp, gif; videos: mp4, webm, m4v
+#   - PowerPoint/Impress (pptx, ppt, ppsx, pps, odp): converted to PDF with LibreOffice
 #   - "until 2026-11-30", "bis 30.11.2026" in the file name: hidden from the next day on
 #
 # --check: only report what it finds (USB stick, network share, files, current state), change nothing.
+#
+# Every file is prepared once (PDF pages rendered, sides filled, …) into data/cache/ and reused
+# from there until it changes, so only new or changed files cost time.
 #
 # Testing on a PC: SOURCE=folder DATA_DIR=out RUN_DIR=tmp CONFIG=/dev/null ./dropstopnshop-sync
 set -uo pipefail
@@ -172,6 +176,8 @@ RUN_DIR=${RUN_DIR:-/run/dropstopnshop}
 FOLDER=${FOLDER:-$([ "$UI_LANG" = de ] && echo Bildschirm || echo Display)}
 SLIDE_SECONDS=${SLIDE_SECONDS:-12}
 RENDER_WIDTH=${RENDER_WIDTH:-1920}
+RENDER_HEIGHT=${RENDER_HEIGHT:-1080}
+FILL_SIDES=${FILL_SIDES:-yes}
 SHARE=${SHARE:-}
 SHARE_CREDENTIALS=${SHARE_CREDENTIALS:-/etc/dropstopnshop/share-credentials}
 
@@ -190,7 +196,7 @@ cleanup() {
 	for m in "$RUN_DIR/usb" "$RUN_DIR/share"; do
 		mountpoint -q "$m" 2>/dev/null && umount -l "$m"
 	done
-	rm -rf "$DATA_DIR/.new"
+	rm -rf "$DATA_DIR/.new" "$DATA_DIR"/cache/.tmp-*
 }
 trap cleanup EXIT
 
@@ -229,6 +235,7 @@ type_of() {
 	*.pdf) echo pdf ;;
 	*.jpg | *.jpeg | *.png | *.webp | *.gif) echo image ;;
 	*.mp4 | *.webm | *.m4v) echo video ;;
+	*.pptx | *.ppt | *.ppsx | *.pps | *.odp) echo office ;;
 	esac
 }
 
@@ -305,6 +312,8 @@ for f in "${all[@]}"; do
 	name=${f##*/}
 	if [ -z "$(type_of "$name")" ]; then
 		notes+=("$(t "übersprungen (unbekannter Dateityp)" "skipped (unknown file type)"): $name")
+	elif [ "$(type_of "$name")" = office ] && ! command -v soffice >/dev/null; then
+		notes+=("$(t "übersprungen (LibreOffice fehlt, bitte das Setup erneut ausführen)" "skipped (LibreOffice is missing, please run the setup again)"): $name")
 	elif expired "$name"; then
 		notes+=("$(t abgelaufen expired): $name")
 	else
@@ -313,7 +322,7 @@ for f in "${all[@]}"; do
 done
 
 fingerprint=$({
-	echo "$SLIDE_SECONDS $RENDER_WIDTH $UI_LANG $FOLDER"
+	echo "$SLIDE_SECONDS $RENDER_WIDTH $RENDER_HEIGHT $FILL_SIDES $UI_LANG $FOLDER"
 	for f in "${active[@]}"; do stat -c '%s %Y' "$f"; echo "${f##*/}"; done
 } | sha1sum | cut -c1-12)
 current=$(cat "$DATA_DIR/current/fingerprint" 2>/dev/null)
@@ -349,40 +358,101 @@ fi
 echo "$(t "Neue Inhalte von" "New content from") $origin:"
 [ ${#notes[@]} -gt 0 ] && printf '  %s\n' "${notes[@]}"
 new="$DATA_DIR/.new"
-rm -rf "$new"
-mkdir -p "$new"
-n=0 slides=()
+cache="$DATA_DIR/cache"
+rm -rf "$new" "$cache"/.tmp-*
+mkdir -p "$new" "$cache"
+
+fill=false
+if [ "$FILL_SIDES" = yes ]; then
+	if python3 -c 'import PIL' 2>/dev/null; then
+		fill=true
+	else
+		echo "  $(t "Ränder werden nicht aufgefüllt: python3-pil fehlt" "Sides are not filled: python3-pil is missing")"
+	fi
+fi
+
+# fill_sides IN OUT [IN OUT …] – fit to the screen and fill the empty sides (see fill-sides)
+fill_sides() { "$HERE/fill-sides" "$RENDER_WIDTH" "$RENDER_HEIGHT" "$@" 2>/dev/null; }
+
+# prepare FILE KIND DIR – puts the slides of FILE into DIR and lists them in DIR/slides
+# (one line per slide: type, tab, file name)
+prepare() {
+	local f=$1 kind=$2 dir=$3 ext p pages=() args=()
+	ext=${f##*.}
+	ext=${ext,,}
+	case $kind in
+	office)
+		# convert a copy: LibreOffice wants to put a lock file next to the file it opens
+		cp "$f" "$dir/in.$ext" || return 1
+		timeout 600 soffice --headless --norestore "-env:UserInstallation=file://$RUN_DIR/office" \
+			--convert-to pdf --outdir "$dir" "$dir/in.$ext" >/dev/null 2>&1
+		rm -f "$dir/in.$ext"
+		[ -s "$dir/in.pdf" ] && prepare "$dir/in.pdf" pdf "$dir" || return 1
+		rm -f "$dir/in.pdf"
+		;;
+	pdf)
+		timeout 300 pdftoppm -png -scale-to "$RENDER_WIDTH" "$f" "$dir/p" 2>/dev/null || return 1
+		pages=("$dir"/p-*.png)
+		[ -e "${pages[0]}" ] || return 1
+		if $fill; then
+			for p in "${pages[@]}"; do args+=("$p" "$p"); done
+			fill_sides "${args[@]}" || echo "  $(t "Ränder nicht aufgefüllt" "Sides not filled"): ${f##*/}"
+		fi
+		for p in "${pages[@]}"; do printf 'image\t%s\n' "${p##*/}"; done >"$dir/slides"
+		;;
+	image)
+		case $ext in jpg | jpeg) p=jpg ;; *) p=png ;; esac
+		# animated GIFs stay as they are
+		if $fill && [ "$ext" != gif ] && fill_sides "$f" "$dir/slide.$p"; then
+			ext=$p
+		else
+			cp "$f" "$dir/slide.$ext" || return 1
+		fi
+		printf 'image\tslide.%s\n' "$ext" >"$dir/slides"
+		;;
+	video)
+		cp "$f" "$dir/slide.$ext" || return 1
+		printf 'video\tslide.%s\n' "$ext" >"$dir/slides"
+		;;
+	esac
+}
+
+n=0 slides=() used=()
 for f in "${active[@]}"; do
 	name=${f##*/}
 	kind=$(type_of "$name")
 	case $kind in
-	pdf)
-		mkdir "$new/pdf"
-		if timeout 300 pdftoppm -png -scale-to "$RENDER_WIDTH" "$f" "$new/pdf/p" 2>/dev/null; then
-			for p in "$new"/pdf/p-*.png; do
-				n=$((n + 1))
-				out=$(printf '%04d.png' "$n")
-				mv "$p" "$new/$out"
-				slides+=("{\"t\": \"image\", \"f\": \"$out\"}")
-			done
-			echo "  PDF: $name"
-		else
-			echo "  $(t "FEHLER, PDF nicht lesbar" "ERROR, cannot read PDF"): $name"
-		fi
-		rm -rf "$new/pdf"
-		;;
-	image | video)
-		ext=${name##*.}
-		n=$((n + 1))
-		out=$(printf '%04d.%s' "$n" "${ext,,}")
-		if cp "$f" "$new/$out"; then
-			slides+=("{\"t\": \"$kind\", \"f\": \"$out\"}")
-			echo "  $(t "$([ "$kind" = image ] && echo Bild || echo Video)" "${kind^}"): $name"
-		else
-			echo "  $(t "FEHLER, nicht kopierbar" "ERROR, cannot copy"): $name"
-		fi
-		;;
+	pdf) label=PDF ;;
+	office) label=PowerPoint ;;
+	image) label=$(t Bild Image) ;;
+	video) label=Video ;;
 	esac
+	# same size, date and settings = same slides, also after renaming the file (e.g. 01_ → 02_)
+	ext=${name##*.}
+	key=$(echo "$(stat -c '%s %Y' "$f") ${ext,,} $RENDER_WIDTH $RENDER_HEIGHT $fill" | sha1sum | cut -c1-16)
+	if [ -f "$cache/$key/slides" ]; then
+		echo "  $label: $name"
+	else
+		echo "  $label: $name ($(t "wird aufbereitet" "preparing") …)"
+		tmp="$cache/.tmp-$key"
+		mkdir -p "$tmp"
+		if ! prepare "$f" "$kind" "$tmp"; then
+			rm -rf "$tmp"
+			echo "  $(t "FEHLER, Datei nicht lesbar" "ERROR, cannot read the file"): $name"
+			continue
+		fi
+		# on the card before it counts as done, so a power cut can't leave a broken cache entry
+		sync "$tmp"/*
+		mv -T "$tmp" "$cache/$key"
+	fi
+	used+=("$key")
+	while IFS=$'\t' read -r type file; do
+		n=$((n + 1))
+		out=$(printf '%04d.%s' "$n" "${file##*.}")
+		# a hard link costs no space; the cache and the states are on the same disk
+		ln "$cache/$key/$file" "$new/$out" 2>/dev/null || cp "$cache/$key/$file" "$new/$out" || continue
+		slides+=("{\"t\": \"$type\", \"f\": \"$out\"}")
+	done <"$cache/$key/slides"
 done
 
 state="state-$(date +%Y%m%d-%H%M%S)-$fingerprint"
@@ -407,7 +477,66 @@ sync
 for s in "$DATA_DIR"/state-*; do
 	[ "${s##*/}" = "$state" ] || [ "${s##*/}" = "$old" ] || rm -rf "$s"
 done
+# Forget prepared files that are no longer in the folder (the states keep their own links).
+for c in "$cache"/*; do
+	[ -e "$c" ] || continue
+	[[ " ${used[*]} " == *" ${c##*/} "* ]] || rm -rf "$c"
+done
 echo "$(t Fertig Done): ${#slides[@]} $(t Folien slides)."
+EOF
+
+	# ---------------------------------------------------------------- fill the sides
+	cat >"$target/fill-sides" <<'EOF'
+#!/usr/bin/env python3
+# DropStopNShop: fits an image to the screen and fills the empty sides with the colours of its
+# edges, so e.g. an A4 page fills the whole monitor instead of sitting between black bars.
+# The outermost pixels are stretched outwards (slightly smoothed, so photos don't get streaks).
+# Usage: fill-sides WIDTH HEIGHT IN OUT [IN OUT …]   (OUT may be IN; .jpg is saved as JPEG)
+import sys
+from PIL import Image, ImageFilter, ImageOps
+
+
+def side(img, box, size):
+    """Stretch the strip `box` of `img` (a few pixels at one edge) to `size`."""
+    strip = img.crop(box)
+    w, h = strip.size
+    if w < h:  # left or right edge: one column, smoothed along its length
+        line = strip.resize((1, h), Image.BOX)
+    else:      # top or bottom edge: one row
+        line = strip.resize((w, 1), Image.BOX)
+    line = line.filter(ImageFilter.GaussianBlur(max(1, max(w, h) // 500)))
+    return line.resize(size, Image.NEAREST)
+
+
+def fill(src, dst, W, H):
+    img = ImageOps.exif_transpose(Image.open(src))
+    if img.mode in ('RGBA', 'LA', 'PA') or 'transparency' in img.info:
+        img = img.convert('RGBA')  # transparent parts show black, like on screen
+        img = Image.alpha_composite(Image.new('RGBA', img.size, (0, 0, 0, 255)), img)
+    img = img.convert('RGB')
+    scale = min(W / img.width, H / img.height)
+    w, h = max(1, round(img.width * scale)), max(1, round(img.height * scale))
+    img = img.resize((w, h), Image.LANCZOS)
+    out = Image.new('RGB', (W, H))
+    x, y = (W - w) // 2, (H - h) // 2
+    e = 3  # edge strip width in pixels
+    if x > 0:
+        out.paste(side(img, (0, 0, min(e, w), h), (x, h)), (0, 0))
+        out.paste(side(img, (max(0, w - e), 0, w, h), (W - w - x, h)), (x + w, 0))
+    if y > 0:
+        out.paste(side(img, (0, 0, w, min(e, h)), (w, y)), (0, 0))
+        out.paste(side(img, (0, max(0, h - e), w, h), (w, H - h - y)), (0, y + h))
+    out.paste(img, (x, y))
+    if dst.lower().endswith(('.jpg', '.jpeg')):
+        out.save(dst, quality=90)
+    else:
+        out.save(dst, compress_level=3)  # faster on the Pi, still small enough
+
+
+W, H = int(sys.argv[1]), int(sys.argv[2])
+files = sys.argv[3:]
+for i in range(0, len(files) - 1, 2):
+    fill(files[i], files[i + 1], W, H)
 EOF
 
 	# ---------------------------------------------------------------- kiosk start
@@ -436,7 +565,7 @@ exec cage -s -- "$BROWSER" --kiosk --ozone-platform=wayland \
 	--check-for-update-interval=31536000 --user-data-dir="$PROFILE" \
 	"$HERE/index.html"
 EOF
-	chmod +x "$target/dropstopnshop-sync" "$target/kiosk.sh"
+	chmod +x "$target/dropstopnshop-sync" "$target/kiosk.sh" "$target/fill-sides"
 }
 
 # ==================================================================== helpers
@@ -512,6 +641,23 @@ remember() { # remember KEY value
 }
 
 has_desktop() { systemctl cat display-manager.service >/dev/null 2>&1; }
+
+# The resolution of the connected monitor as "WIDTH HEIGHT" (nothing if none is found).
+# Above Full HD it is scaled down to 1920 wide: same shape, and the Pi stays fast.
+detect_screen() {
+	local c mode
+	for c in /sys/class/drm/card*-*; do
+		[ "$(cat "$c/status" 2>/dev/null)" = connected ] || continue
+		mode=$(head -n 1 "$c/modes" 2>/dev/null)
+		[[ $mode =~ ^([0-9]+)x([0-9]+) ]] || continue
+		local w=${BASH_REMATCH[1]} h=${BASH_REMATCH[2]}
+		if ((w > 1920)); then
+			h=$((h * 1920 / w)) w=1920
+		fi
+		echo "$w $h"
+		return
+	done
+}
 
 # choose VAR "title" default item… – numbered list, stores the chosen number (1-based) in VAR
 choose() {
@@ -769,9 +915,13 @@ install_pi() {
 		*) app=$PWD/dropstopnshop ;;
 		esac
 	fi
-	UI_LANG="" FOLDER="" SHARE="" SLIDE_SECONDS=12 RENDER_WIDTH=1920
+	UI_LANG="" FOLDER="" SHARE="" SLIDE_SECONDS=12 RENDER_WIDTH=1920 RENDER_HEIGHT="" FILL_SIDES=yes
 	[ -r "$app/config" ] && . "$app/config"
 	UI_LANG=${UI_LANG:-$(detect_lang)}
+	if [ -z "$RENDER_HEIGHT" ]; then  # first install, or from a version without it
+		read -r RENDER_WIDTH RENDER_HEIGHT < <(detect_screen || true) || true
+		RENDER_WIDTH=${RENDER_WIDTH:-1920} RENDER_HEIGHT=${RENDER_HEIGHT:-1080}
+	fi
 
 	step "DropStopNShop"
 	ask answer "Sprache / Language (de/en)" "$UI_LANG"
@@ -781,13 +931,15 @@ install_pi() {
 	t "Das Setup richtet diesen Pi als Ladenanzeige ein. Es wird:" \
 		"This setup turns this Pi into a shop display. It will:"
 	echo
-	t "  - das System aktualisieren und cage, Chromium, poppler-utils und cifs-utils installieren
+	t "  - das System aktualisieren und cage, Chromium, LibreOffice (für PowerPoint), poppler-utils,
+    python3-pil und cifs-utils installieren
   - den Installationsordner anlegen (Programm, Einstellungen, aufbereitete Folien)
   - zwei Dienste einrichten: Abgleich alle 3 Minuten und die Vollbild-Anzeige beim Einschalten
   - beim Start die Konsole statt eines Desktops starten (falls einer installiert ist)
   - die SD-Karte schonen: Logs nur im RAM, keine automatischen Updates, kein Swap
   - die Textmeldungen beim Start ausblenden" \
-		"  - update the system and install cage, Chromium, poppler-utils and cifs-utils
+		"  - update the system and install cage, Chromium, LibreOffice (for PowerPoint), poppler-utils,
+    python3-pil and cifs-utils
   - create the install folder (program, settings, prepared slides)
   - set up two services: a sync every 3 minutes and the full-screen display at power-on
   - boot to the console instead of a desktop (if one is installed)
@@ -810,6 +962,18 @@ install_pi() {
 		"${FOLDER:-$(t Bildschirm Display)}"
 	ask SLIDE_SECONDS "$(t "Sekunden pro Folie" "Seconds per slide")" "$SLIDE_SECONDS"
 	[[ $SLIDE_SECONDS =~ ^[0-9]+$ ]] || SLIDE_SECONDS=12
+	echo
+	echo "$(t "Bildschirm" "Screen"): ${RENDER_WIDTH}x$RENDER_HEIGHT $(t "(änderbar in" "(can be changed in") $app/config)"
+	t "Folien, die nicht das Format des Bildschirms haben (z. B. ein A4-Blatt oder ein Foto), bekommen
+sonst schwarze Ränder. Die Ränder können stattdessen mit den Farben am Rand der Folie aufgefüllt werden." \
+		"Slides that don't have the shape of the screen (e.g. an A4 page or a photo) get black bars
+otherwise. Instead, the bars can be filled with the colours at the edge of the slide."
+	echo
+	if confirm "$(t "Ränder auffüllen?" "Fill the bars?")" "$([ "$FILL_SIDES" = no ] && echo n || echo y)"; then
+		FILL_SIDES=yes
+	else
+		FILL_SIDES=no
+	fi
 	if ! command -v tailscale >/dev/null; then
 		confirm "$(t "Tailscale für Fernwartung per SSH installieren?" "Install Tailscale for remote SSH maintenance?")" n &&
 			setup_tailscale=true
@@ -829,8 +993,17 @@ install_pi() {
 	export DEBIAN_FRONTEND=noninteractive
 	apt-get update
 	apt-get -y full-upgrade
-	apt-get -y install cage poppler-utils cifs-utils
+	apt-get -y install cage poppler-utils cifs-utils python3-pil
 	apt-get -y install chromium || apt-get -y install chromium-browser
+	# PowerPoint files are converted with LibreOffice; without the desktop parts it stays smaller.
+	# Carlito, Caladea and Liberation have the same sizes as Calibri, Cambria, Arial, Times New Roman.
+	if ! apt-get -y install --no-install-recommends libreoffice-impress-nogui &&
+		! apt-get -y install --no-install-recommends libreoffice-impress; then
+		t "LibreOffice ließ sich nicht installieren – PowerPoint-Dateien werden übersprungen." \
+			"Could not install LibreOffice – PowerPoint files will be skipped."
+		echo
+	fi
+	apt-get -y install fonts-crosextra-carlito fonts-crosextra-caladea fonts-liberation2 fonts-dejavu-core || true
 
 	# ------------------------------------------------ program
 	step "$(t "Programm nach $app installieren" "Installing the program to $app")"
@@ -845,8 +1018,12 @@ FOLDER=$(printf '%q' "$FOLDER")
 SHARE=$(printf '%q' "$SHARE")
 # seconds per image or PDF page
 SLIDE_SECONDS=$SLIDE_SECONDS
-# width in pixels that PDF pages are rendered at (match the monitor)
+# size of the monitor in pixels; slides are prepared in this size (found by the setup)
 RENDER_WIDTH=$RENDER_WIDTH
+RENDER_HEIGHT=$RENDER_HEIGHT
+# yes = fill the bars next to slides that don't have the shape of the screen with the
+# colours at their edge (PDF pages, PowerPoint slides and images, not videos); no = black bars
+FILL_SIDES=$FILL_SIDES
 EOF
 	# keep a copy so the setup can be run again later
 	if [ -f "$SELF" ]; then
