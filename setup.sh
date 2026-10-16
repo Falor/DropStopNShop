@@ -428,6 +428,19 @@ for c in /sys/class/drm/card*-HDMI-A-*; do
 	break
 done
 
+# Invisible mouse pointer: cage draws its default pointer in the middle of the screen until the
+# mouse moves into the page, so hand it a cursor theme whose pointers are a single transparent
+# pixel (Xcursor format). Lives in RAM next to the profile.
+CURSORS="${XDG_RUNTIME_DIR:-/tmp}/kiosk-cursors"
+mkdir -p "$CURSORS/none/cursors"
+printf 'Xcur\x10\0\0\0\0\0\x01\0\x01\0\0\0\x02\0\xfd\xff\x18\0\0\0\x1c\0\0\0\x24\0\0\0\x02\0\xfd\xff\x18\0\0\0\x01\0\0\0\x01\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' \
+	>"$CURSORS/none/cursors/default"
+for name in left_ptr arrow pointer hand1 hand2 text xterm wait watch progress crosshair \
+	not-allowed grab grabbing move all-scroll; do
+	ln -sf default "$CURSORS/none/cursors/$name"
+done
+export XCURSOR_PATH="$CURSORS" XCURSOR_THEME=none
+
 rm -rf "$PROFILE"
 exec cage -s -- "$BROWSER" --kiosk --ozone-platform=wayland \
 	--noerrdialogs --disable-infobars --no-first-run --no-default-browser-check \
