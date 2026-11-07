@@ -7,6 +7,8 @@
 #   sudo bash setup.sh                  set up the Pi (safe to run again, e.g. to change the share)
 #                                       installs to ./dropstopnshop (asks; remembers the folder)
 #   sudo bash setup.sh --check          show what the display finds: sources, files, current state
+#   sudo bash setup.sh --update [BRANCH]  update to the latest version and keep all settings
+#                                       (default: the branch of the last update, else main)
 #   sudo bash setup.sh --uninstall      remove it again and undo the system changes
 #   sudo bash setup.sh --desktop        boot to the desktop again instead of the display
 #   bash setup.sh --preview [FOLDER]    preview the slideshow on a Linux desktop
@@ -25,13 +27,24 @@
 # The whole script runs inside main(), so a download cut short by `curl | bash` does nothing.
 set -euo pipefail
 
-REPO_RAW=https://raw.githubusercontent.com/Falor/DropStopNShop/main
+REPO_RAW=https://raw.githubusercontent.com/Falor/DropStopNShop  # + /<branch>/setup.sh
 CONF_DIR=/etc/dropstopnshop  # share credentials and the install location (root only)
 SELF=${BASH_SOURCE[0]:-}
 
+# write_files DIR – writes the program files into DIR. Each file is written next to it first and
+# then renamed into place, so a sync that is running during an update keeps its old copy.
 write_files() {
+	local target=$1 stage=$1/.files-new f
+	rm -rf "$stage"
+	mkdir -p "$stage"
+	write_program "$stage"
+	sync "$stage"/* 2>/dev/null || true
+	for f in "$stage"/*; do mv -f "$f" "$target/"; done
+	rmdir "$stage"
+}
+
+write_program() {
 	local target=$1
-	mkdir -p "$target"
 
 	# ---------------------------------------------------------------- slideshow
 	cat >"$target/index.html" <<'EOF'
@@ -49,31 +62,58 @@ write_files() {
           flex-direction: column; color: #ddd; font: 2.2vw/1.5 sans-serif; text-align: center; }
   #hint p { max-width: 70vw; margin: 0 0 1em; }
   #hint h1 { font-size: 3.5vw; margin: 0 0 1em; color: #fff; }
+  #banner { display: none; position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+            padding: .6em 1em; background: #b00020; color: #fff; font: 1.6vw/1.4 sans-serif;
+            text-align: center; }
 </style>
 </head>
 <body>
 <div id="hint"><h1 id="hint-title"></h1><p id="hint-files"></p><p id="hint-note"></p></div>
+<div id="banner"></div>
 <script>
 // The sync job writes the slide list to data/current/playlist.js (window.SLIDESHOW).
-// It is reloaded after every round, so new content appears without a restart.
+// It is checked every 20 seconds (and after every round), so new content appears within a
+// slide or two, without a restart. data/status.js (window.STATUS, in RAM) can ask for a banner.
 const DATA = 'data/';
 const TEXT = {
   de: { title: 'Keine Inhalte gefunden', folder: 'Bildschirm',
         files: ['PDF- oder PowerPoint-Dateien, Bilder (JPG, PNG) oder Videos (MP4) in den Ordner „', '“ legen.'],
-        note: 'Die Anzeige holt sie sich innerhalb weniger Minuten von selbst.' },
+        note: 'Die Anzeige holt sie sich innerhalb weniger Minuten von selbst.',
+        reboot: 'Update installiert – bitte die Anzeige einmal aus- und wieder einschalten.' },
   en: { title: 'No content found', folder: 'Display',
         files: ['Put PDF or PowerPoint files, images (JPG, PNG) or videos (MP4) into the folder “', '”.'],
-        note: 'The display picks them up within a few minutes.' },
+        note: 'The display picks them up within a few minutes.',
+        reboot: 'Update installed – please switch the display off and on again.' },
 };
-let show = null, index = -1, current = null, timer = null;
+const CHECK_MS = 20000;
+let show = null, index = -1, current = null, timer = null, checked = 0;
 
-function loadPlaylist() {
+// load a script that sets window[name]; resolves to it, or to null if the file is missing
+function load(file, name) {
   return new Promise(done => {
+    window[name] = null;
     const s = document.createElement('script');
-    s.src = DATA + 'current/playlist.js?' + Date.now();
-    s.onload = s.onerror = () => { s.remove(); done(window.SLIDESHOW || null); };
+    s.src = DATA + file + '?' + Date.now();
+    s.onload = s.onerror = () => { s.remove(); done(window[name] || null); };
     document.head.appendChild(s);
   });
+}
+
+async function refresh() {
+  checked = Date.now();
+  const status = await load('status.js', 'STATUS');
+  const banner = document.getElementById('banner');
+  if (status?.reboot) {
+    const t = TEXT[status.lang] || TEXT[show?.lang] || TEXT.en;
+    banner.textContent = t.reboot;
+    banner.style.display = 'block';
+  } else {
+    banner.style.display = 'none';
+  }
+  const fresh = await load('current/playlist.js', 'SLIDESHOW');
+  if (!fresh) return;  // e.g. caught mid-switch: keep the old show and try again next time
+  if (!show || fresh.state !== show.state) index = 0;  // new content: start from the top
+  show = fresh;
 }
 
 function hint(on) {
@@ -93,8 +133,10 @@ async function next() {
   clearTimeout(timer);
   index++;
   if (!show || index >= show.slides.length) {
-    show = await loadPlaylist() || show;
     index = 0;
+    await refresh();
+  } else if (Date.now() - checked > CHECK_MS) {
+    await refresh();
   }
   if (!show || show.slides.length === 0) {
     if (current) { current.remove(); current = null; }
@@ -113,7 +155,8 @@ async function next() {
     if (!handled) { handled = true; fadeIn(el, video); }
   });
   el.addEventListener('error', () => {
-    if (!handled) { handled = true; el.remove(); timer = setTimeout(next, 1000); }
+    // the state it belongs to may just have been replaced: look for new content first
+    if (!handled) { handled = true; el.remove(); checked = 0; timer = setTimeout(next, 1000); }
   });
   if (video) { el.muted = true; el.playsInline = true; }
   el.src = DATA + show.state + '/' + slide.f;
@@ -155,6 +198,8 @@ EOF
 #   - PDF: every page becomes a slide; images: jpg, png, webp, gif; videos: mp4, webm, m4v
 #   - PowerPoint/Impress (pptx, ppt, ppsx, pps, odp): converted to PDF with LibreOffice
 #   - "until 2026-11-30", "bis 30.11.2026" in the file name: hidden from the next day on
+#   - settings.json in the folder: settings the shop can change itself (seconds per slide, fill
+#     the sides, automatic updates); they win over the config file. Not shown as a slide.
 #
 # --check: only report what it finds (USB stick, network share, files, current state), change nothing.
 #
@@ -180,6 +225,8 @@ RENDER_HEIGHT=${RENDER_HEIGHT:-1080}
 FILL_SIDES=${FILL_SIDES:-yes}
 SHARE=${SHARE:-}
 SHARE_CREDENTIALS=${SHARE_CREDENTIALS:-/etc/dropstopnshop/share-credentials}
+UPDATE=no UPDATE_BRANCH=main
+UPDATE_EVERY=$((6 * 3600))  # look for a new version at most this often (and after every boot)
 
 t() { if [ "$UI_LANG" = de ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
 
@@ -193,7 +240,7 @@ fi
 
 cleanup() {
 	local m
-	for m in "$RUN_DIR/usb" "$RUN_DIR/share"; do
+	for m in "$RUN_DIR/usb" "$RUN_DIR/share" "$RUN_DIR/share-rw"; do
 		mountpoint -q "$m" 2>/dev/null && umount -l "$m"
 	done
 	rm -rf "$DATA_DIR/.new" "$DATA_DIR"/cache/.tmp-*
@@ -255,6 +302,110 @@ expired() {
 	[[ $date < $today ]]
 }
 
+# read_settings FILE – prints the valid settings from settings.json as shell assignments
+# (only numbers, yes/no and checked branch names, so the output is safe to eval)
+read_settings() {
+	python3 - "$1" <<'PY'
+import json, re, shlex, sys
+
+def out(key, value):
+    print(f"{key}={shlex.quote(str(value))}")
+
+def yes_no(value):
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, str) and value.strip().lower() in ("yes", "ja", "true", "on", "1"):
+        return "yes"
+    if isinstance(value, str) and value.strip().lower() in ("no", "nein", "false", "off", "0"):
+        return "no"
+    raise ValueError
+
+try:
+    with open(sys.argv[1], encoding="utf-8-sig") as f:
+        d = json.load(f)
+    if not isinstance(d, dict):
+        raise ValueError("expected { … }")
+except Exception as e:
+    out("SETTINGS_ERROR", e)
+    sys.exit()
+
+bad = []
+if "slide_seconds" in d:
+    v = d["slide_seconds"]
+    if isinstance(v, (int, float, str)) and not isinstance(v, bool) and str(v).strip().isdigit() \
+            and 1 <= int(str(v).strip()) <= 3600:
+        out("SLIDE_SECONDS", int(str(v).strip()))
+    else:
+        bad.append("slide_seconds")
+for key, var in (("fill_sides", "FILL_SIDES"), ("update", "UPDATE")):
+    if key in d:
+        try:
+            out(var, yes_no(d[key]))
+        except ValueError:
+            bad.append(key)
+if "update_branch" in d:
+    v = d["update_branch"]
+    if isinstance(v, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,99}", v.strip()) \
+            and ".." not in v:
+        out("UPDATE_BRANCH", v.strip())
+    else:
+        bad.append("update_branch")
+if bad:
+    out("SETTINGS_ERROR", "invalid: " + ", ".join(bad))
+PY
+}
+
+# Look for a new version in the background (see setup.sh --auto-update). It runs as its own
+# systemd unit, so it outlives this sync job; only one runs at a time.
+maybe_update() {
+	local now last=0 branch=""
+	now=$(cut -d. -f1 /proc/uptime)  # not the clock: a Pi without network may not know the date
+	[ -r "$RUN_DIR/update-checked" ] && read -r last branch <"$RUN_DIR/update-checked"
+	if [ "$branch" = "$UPDATE_BRANCH" ] && ((last <= now && now - last < UPDATE_EVERY)); then
+		return
+	fi
+	[ -f "$HERE/setup.sh" ] || return
+	echo "$now $UPDATE_BRANCH" >"$RUN_DIR/update-checked"
+	if systemd-run --unit=dropstopnshop-update --collect --no-block --property=Nice=10 \
+		/bin/bash "$HERE/setup.sh" --auto-update "$UPDATE_BRANCH" >/dev/null 2>&1; then
+		echo "$(t "Suche nach einer neuen Version" "Looking for a new version") ($UPDATE_BRANCH) – $(t Protokoll log): journalctl -u dropstopnshop-update"
+	fi
+}
+
+# No settings.json in the network folder yet: the Pi puts one there with the current settings,
+# so the shop finds it next to the slides. Needs write access to the folder; tried at most once
+# an hour. The result is kept for --check in $RUN_DIR/settings-created.
+create_settings() {
+	local m="$RUN_DIR/share-rw" now last=0 branch result
+	now=$(cut -d. -f1 /proc/uptime)
+	[ -r "$RUN_DIR/settings-tried" ] && read -r last <"$RUN_DIR/settings-tried"
+	((last > 0 && last <= now && now - last < 3600)) && return
+	echo "$now" >"$RUN_DIR/settings-tried"
+	branch=$(cat /etc/dropstopnshop/branch 2>/dev/null || echo main)
+	mkdir -p "$m"
+	if ! timeout 40 mount -t cifs "$SHARE" "$m" \
+		-o "rw,credentials=$SHARE_CREDENTIALS,iocharset=utf8,soft,noserverino" 2>/dev/null; then
+		result=readonly
+	elif find "$m" -maxdepth 1 -iname settings.json | grep -q .; then
+		result=ok
+	elif printf '{\n  "slide_seconds": %d,\n  "fill_sides": %s,\n  "update": false,\n  "update_branch": "%s"\n}\n' \
+		"$SLIDE_SECONDS" "$([ "$FILL_SIDES" = no ] && echo false || echo true)" "$branch" \
+		>"$m/settings.json" 2>/dev/null; then
+		result=ok
+		echo "$(t "settings.json im Netzwerkordner angelegt" "Created settings.json in the network folder")"
+	else
+		rm -f "$m/settings.json" 2>/dev/null
+		result=readonly
+	fi
+	mountpoint -q "$m" && { umount "$m" || umount -l "$m"; }
+	echo "$result" >"$RUN_DIR/settings-created"
+	if [ "$result" = readonly ]; then
+		t "settings.json kann nicht angelegt werden: Der Benutzer des Pi darf im Netzwerkordner nicht schreiben." \
+			"Can't create settings.json: the Pi's user may not write to the network folder."
+		echo
+	fi
+}
+
 json_str() {
 	local s=${1//\\/\\\\}
 	printf '"%s"' "${s//\"/\\\"}"
@@ -307,6 +458,31 @@ fi
 all=()
 [ -n "$src" ] && mapfile -d '' all < <(LC_ALL=C sort -z -f "$RUN_DIR/list")
 
+# --- settings.json in the folder: what the shop may change itself, wins over the config file
+settings="" SETTINGS_ERROR=""
+files=()
+for f in "${all[@]}"; do
+	name=${f##*/}
+	if [ "${name,,}" = settings.json ]; then settings=$f; else files+=("$f"); fi
+done
+all=("${files[@]}")
+if [ -n "$settings" ]; then
+	if command -v python3 >/dev/null; then
+		eval "$(read_settings "$settings")"
+	else
+		SETTINGS_ERROR="python3 $(t fehlt "is missing")"
+	fi
+fi
+if [ -z "$settings" ] && [ "$src" = "$RUN_DIR/share" ] && ! $CHECK; then
+	create_settings
+fi
+if [ -n "$SETTINGS_ERROR" ]; then
+	echo "settings.json: $(t "Fehler, Rest wird benutzt" "error, using the rest") – $SETTINGS_ERROR"
+fi
+if [ "$UPDATE" = yes ] && [ -z "${SOURCE:-}" ] && ! $CHECK; then
+	maybe_update
+fi
+
 active=() notes=()
 for f in "${all[@]}"; do
 	name=${f##*/}
@@ -334,6 +510,25 @@ if $CHECK; then
 		[ ${#all[@]} -eq 0 ] && echo "  $(t "(Ordner ist leer)" "(folder is empty)")"
 		for f in "${active[@]}"; do echo "  $(t "wird gezeigt" "shown"): ${f##*/}"; done
 		[ ${#notes[@]} -gt 0 ] && printf '  %s\n' "${notes[@]}"
+		echo
+		if [ -n "$settings" ]; then
+			echo "$(t "Einstellungen aus" "Settings from") settings.json:"
+		else
+			echo "$(t "Einstellungen (keine settings.json im Ordner)" "Settings (no settings.json in the folder)"):"
+			if [ "$src" != "$RUN_DIR/share" ]; then
+				:
+			elif [ "$(cat "$RUN_DIR/settings-created" 2>/dev/null)" = readonly ]; then
+				echo "  $(t "Der Pi kann sie nicht anlegen: Sein Benutzer darf im Netzwerkordner nicht schreiben." \
+					"The Pi can't create it: its user may not write to the network folder.")"
+				echo "  $(t "Schreibrecht geben (oder die Datei von Hand anlegen)." \
+					"Give it write access (or create the file by hand).")"
+			else
+				echo "  $(t "Der nächste Abgleich legt sie an." "The next sync creates it.")"
+			fi
+		fi
+		echo "  $(t "Sekunden pro Folie" "seconds per slide"): $SLIDE_SECONDS"
+		echo "  $(t "Ränder auffüllen" "fill the sides"): $FILL_SIDES"
+		echo "  $(t "Automatische Updates" "automatic updates"): $UPDATE$([ "$UPDATE" = yes ] && echo " ($UPDATE_BRANCH)")"
 	fi
 	echo
 	if [ -z "$current" ]; then
@@ -557,6 +752,19 @@ for c in /sys/class/drm/card*-HDMI-A-*; do
 	break
 done
 
+# Invisible mouse pointer: cage draws its default pointer in the middle of the screen until the
+# mouse moves into the page, so hand it a cursor theme whose pointers are a single transparent
+# pixel (Xcursor format). Lives in RAM next to the profile.
+CURSORS="${XDG_RUNTIME_DIR:-/tmp}/kiosk-cursors"
+mkdir -p "$CURSORS/none/cursors"
+printf 'Xcur\x10\0\0\0\0\0\x01\0\x01\0\0\0\x02\0\xfd\xff\x18\0\0\0\x1c\0\0\0\x24\0\0\0\x02\0\xfd\xff\x18\0\0\0\x01\0\0\0\x01\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0' \
+	>"$CURSORS/none/cursors/default"
+for name in left_ptr arrow pointer hand1 hand2 text xterm wait watch progress crosshair \
+	not-allowed grab grabbing move all-scroll; do
+	ln -sf default "$CURSORS/none/cursors/$name"
+done
+export XCURSOR_PATH="$CURSORS" XCURSOR_THEME=none
+
 rm -rf "$PROFILE"
 exec cage -s -- "$BROWSER" --kiosk --ozone-platform=wayland \
 	--noerrdialogs --disable-infobars --no-first-run --no-default-browser-check \
@@ -617,8 +825,8 @@ preview() {
 	}
 	sync_preview
 	xdg-open "file://$tmp/app/index.html" >/dev/null 2>&1 &
-	t "Vorschau für $src läuft – Änderungen im Ordner erscheinen nach dem nächsten Durchlauf. Ende mit Strg+C." \
-		"Previewing $src – changes in the folder show up after the next round. Stop with Ctrl+C."
+	t "Vorschau für $src läuft – Änderungen im Ordner erscheinen nach wenigen Sekunden. Ende mit Strg+C." \
+		"Previewing $src – changes in the folder show up within seconds. Stop with Ctrl+C."
 	echo
 	while sleep 5; do sync_preview; done
 }
@@ -777,8 +985,10 @@ setup_wifi() {
 
 ask_credentials() {
 	local user pass
-	t "Benutzer mit Zugriff auf den Netzwerkordner (am besten nur Leserecht)." \
-		"A user with access to the network folder (read-only is best)."
+	t "Benutzer mit Zugriff auf den Netzwerkordner. Mit Schreibrecht legt der Pi dort die Datei
+settings.json für die Einstellungen an; die Inhalte selbst liest er nur." \
+		"A user with access to the network folder. With write access the Pi puts the file
+settings.json for the settings there; the content itself it only reads."
 	echo
 	ask user "$(t Benutzername Username)" ""
 	read -r -s -p "$(t Passwort Password): " pass </dev/tty || true
@@ -988,11 +1198,40 @@ otherwise. Instead, the bars can be filled with the colours at the edge of the s
 	fi
 	setup_share
 
+	place_settings_file "$app"
+	install_system "$app" "$user" full
+
+	# ------------------------------------------------ remote maintenance
+	if $setup_tailscale; then
+		step "Tailscale"
+		curl -fsSL https://tailscale.com/install.sh | sh
+		tailscale up --ssh --hostname "$(hostname)"
+	fi
+
+	# ------------------------------------------------ first sync
+	step "$(t "Erster Abgleich" "First sync")"
+	"$app/dropstopnshop-sync" || true
+
+	step "$(t Fertig Done)"
+	t "Nach dem Neustart erscheint die Anzeige automatisch." "After the reboot the display starts automatically."
+	echo
+	echo "$(t Programm Program): $app"
+	echo "$(t "Protokolle" "Logs"):  journalctl -u dropstopnshop-sync   journalctl -u dropstopnshop-kiosk"
+	if confirm "$(t "Jetzt neu starten?" "Reboot now?")" y; then
+		reboot
+	fi
+}
+
+# install_system APP USER full|update – everything that needs no questions: packages, program,
+# services, SD card care. Used by the setup and by updates.
+install_system() {
+	local app=$1 user=$2 mode=$3
 	# ------------------------------------------------ packages
 	step "$(t "System aktualisieren und Pakete installieren (dauert eine Weile)" "Updating the system and installing packages (takes a while)")"
 	export DEBIAN_FRONTEND=noninteractive
 	apt-get update
-	apt-get -y full-upgrade
+	# an update only adds what is missing; upgrading the whole system stays a job for a person
+	if [ "$mode" = full ]; then apt-get -y full-upgrade; fi
 	apt-get -y install cage poppler-utils cifs-utils python3-pil
 	apt-get -y install chromium || apt-get -y install chromium-browser
 	# PowerPoint files are converted with LibreOffice; without the desktop parts it stays smaller.
@@ -1008,31 +1247,20 @@ otherwise. Instead, the bars can be filled with the colours at the edge of the s
 	# ------------------------------------------------ program
 	step "$(t "Programm nach $app installieren" "Installing the program to $app")"
 	write_files "$app"
-	cat >"$app/config" <<EOF
-# DropStopNShop settings – take effect with the next sync (within 3 minutes).
-# Run "sudo bash $app/setup.sh" to change them interactively.
-UI_LANG=$UI_LANG
-# folder with the content (on the network share and on USB sticks)
-FOLDER=$(printf '%q' "$FOLDER")
-# network folder (SMB); empty = USB stick only. Credentials: $CONF_DIR/share-credentials
-SHARE=$(printf '%q' "$SHARE")
-# seconds per image or PDF page
-SLIDE_SECONDS=$SLIDE_SECONDS
-# size of the monitor in pixels; slides are prepared in this size (found by the setup)
-RENDER_WIDTH=$RENDER_WIDTH
-RENDER_HEIGHT=$RENDER_HEIGHT
-# yes = fill the bars next to slides that don't have the shape of the screen with the
-# colours at their edge (PDF pages, PowerPoint slides and images, not videos); no = black bars
-FILL_SIDES=$FILL_SIDES
-EOF
-	# keep a copy so the setup can be run again later
+	write_config "$app"
+	# keep a copy so the setup can be run again later (renamed into place: it may be running)
 	if [ -f "$SELF" ]; then
-		[ "$(realpath "$SELF")" = "$app/setup.sh" ] || cp "$SELF" "$app/setup.sh"
-	else
-		curl -fsSL "$REPO_RAW/setup.sh" -o "$app/setup.sh" || true
+		if [ "$(realpath "$SELF")" != "$(realpath -m "$app/setup.sh")" ]; then
+			cp "$SELF" "$app/.setup.sh.new" && mv -f "$app/.setup.sh.new" "$app/setup.sh"
+		fi
+	else  # started via curl | bash: fetch the branch the last update came from
+		curl -fsSL "$REPO_RAW/$(current_branch)/setup.sh" -o "$app/.setup.sh.new" &&
+			mv -f "$app/.setup.sh.new" "$app/setup.sh" || rm -f "$app/.setup.sh.new"
 	fi
 	chown -R "$user:" "$app"
 	mkdir -p "$app/data"  # written by the sync job as root
+	# the banner on the screen ("please restart") lives in RAM, so a restart clears it
+	ln -sfn /run/dropstopnshop/status.js "$app/data/status.js"
 	echo "$app" >"$CONF_DIR/location"
 
 	cat >/etc/systemd/system/dropstopnshop-sync.service <<EOF
@@ -1122,24 +1350,189 @@ EOF
 		printf '# dropstopnshop\n[all]\ndisable_splash=1\n' >>"$config_txt"
 	fi
 
-	# ------------------------------------------------ remote maintenance
-	if $setup_tailscale; then
-		step "Tailscale"
-		curl -fsSL https://tailscale.com/install.sh | sh
-		tailscale up --ssh --hostname "$(hostname)"
+}
+
+write_config() {
+	cat >"$1/config" <<EOF
+# DropStopNShop settings – take effect with the next sync (within 3 minutes).
+# Run "sudo bash $1/setup.sh" to change them interactively.
+# settings.json in the display folder wins over SLIDE_SECONDS and FILL_SIDES.
+UI_LANG=$UI_LANG
+# folder with the content (on the network share and on USB sticks)
+FOLDER=$(printf '%q' "$FOLDER")
+# network folder (SMB); empty = USB stick only. Credentials: $CONF_DIR/share-credentials
+SHARE=$(printf '%q' "$SHARE")
+# seconds per image or PDF page
+SLIDE_SECONDS=$SLIDE_SECONDS
+# size of the monitor in pixels; slides are prepared in this size (found by the setup)
+RENDER_WIDTH=$RENDER_WIDTH
+RENDER_HEIGHT=$RENDER_HEIGHT
+# yes = fill the bars next to slides that don't have the shape of the screen with the
+# colours at their edge (PDF pages, PowerPoint slides and images, not videos); no = black bars
+FILL_SIDES=$FILL_SIDES
+EOF
+}
+
+# settings.json for the display folder, with the current settings
+settings_json() {
+	cat <<EOF
+{
+  "slide_seconds": $SLIDE_SECONDS,
+  "fill_sides": $([ "$FILL_SIDES" = no ] && echo false || echo true),
+  "update": false,
+  "update_branch": "$(current_branch)"
+}
+EOF
+}
+
+# Puts settings.json into the network folder, so the shop can change the settings itself.
+# That needs write access; with a read-only user it says how to add the file by hand.
+place_settings_file() {
+	local app=$1 m=/run/dropstopnshop-setup placed=false
+	mkdir -p "$app"
+	settings_json >"$app/settings.example.json"
+	if [ -n "$SHARE" ]; then
+		mkdir -p "$m"
+		if timeout 40 mount -t cifs "$SHARE" "$m" \
+			-o "rw,credentials=$CONF_DIR/share-credentials,iocharset=utf8,soft,noserverino" 2>/dev/null; then
+			if find "$m" -maxdepth 1 -iname settings.json | grep -q .; then
+				t "settings.json ist schon im Netzwerkordner." "settings.json is already in the network folder."
+				echo
+				placed=true
+			elif settings_json >"$m/settings.json" 2>/dev/null; then
+				t "settings.json in den Netzwerkordner gelegt: Dort lassen sich Sekunden pro Folie, Ränder
+und automatische Updates ändern." "Put settings.json into the network folder: seconds per slide, the
+sides and automatic updates can be changed there."
+				echo
+				placed=true
+			fi
+			umount "$m" || umount -l "$m"
+		fi
+		rmdir "$m" 2>/dev/null || true
 	fi
+	if ! $placed; then
+		t "Um die Einstellungen im Ordner ändern zu können, eine Datei settings.json mit diesem Inhalt
+in den Ordner „$FOLDER“ legen (Vorlage: $app/settings.example.json):" \
+			"To change the settings from the folder, put a file settings.json with this content into the
+folder \"$FOLDER\" (template: $app/settings.example.json):"
+		echo
+		settings_json
+	fi
+}
 
-	# ------------------------------------------------ first sync
-	step "$(t "Erster Abgleich" "First sync")"
-	"$app/dropstopnshop-sync" || true
+# The branch the program comes from (set by --update/--auto-update, otherwise main)
+current_branch() { cat "$CONF_DIR/branch" 2>/dev/null || echo main; }
 
-	step "$(t Fertig Done)"
-	t "Nach dem Neustart erscheint die Anzeige automatisch." "After the reboot the display starts automatically."
+# fetch_setup BRANCH FILE – downloads setup.sh of that branch and checks it can update itself
+fetch_setup() {
+	if ! [[ $1 =~ ^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$ ]] || [[ $1 == *..* ]]; then
+		echo "$(t "Ungültiger Branch" "Invalid branch"): $1"
+		return 1
+	fi
+	if ! curl -fsSL --max-time 120 "$REPO_RAW/$1/setup.sh" -o "$2"; then
+		echo "$(t "Download fehlgeschlagen" "Download failed"): $REPO_RAW/$1/setup.sh"
+		return 1
+	fi
+	if ! head -n 3 "$2" | grep -q '^# DropStopNShop' || ! bash -n "$2" 2>/dev/null; then
+		echo "$(t "Die heruntergeladene Datei ist kein gültiges setup.sh" "The downloaded file is not a valid setup.sh") ($1)"
+		return 1
+	fi
+	if ! grep -q -- '--apply-update)' "$2"; then
+		t "Diese Version kann sich nicht selbst installieren (zu alt). Bitte das Setup von Hand ausführen." \
+			"This version can't install itself (too old). Please run its setup by hand."
+		echo
+		return 1
+	fi
+}
+
+# Loads the existing installation: sets app and the settings from its config
+load_install() {
+	app=$(installed_app)
+	if [ -z "$app" ] || [ ! -r "$app/config" ]; then
+		echo "DropStopNShop is not installed. Please run the setup: sudo bash setup.sh"
+		exit 1
+	fi
+	UI_LANG="" FOLDER="" SHARE="" SLIDE_SECONDS=12 RENDER_WIDTH=1920 RENDER_HEIGHT="" FILL_SIDES=yes
+	. "$app/config"
+	UI_LANG=${UI_LANG:-en}
+	if [ -z "$RENDER_HEIGHT" ]; then  # from a version without it
+		read -r RENDER_WIDTH RENDER_HEIGHT < <(detect_screen || true) || true
+		RENDER_WIDTH=${RENDER_WIDTH:-1920} RENDER_HEIGHT=${RENDER_HEIGHT:-1080}
+	fi
+}
+
+# --apply-update BRANCH: run by --update/--auto-update with the NEW setup.sh. Installs it over the
+# existing installation without asking anything; keeps config and network folder password.
+apply_update() {
+	need_root
+	local app user
+	load_install
+	user=$(stat -c %U "$app")
+	echo "$1" >"$CONF_DIR/branch"
+	install_system "$app" "$user" update
+	step "$(t "Update installiert" "Update installed") ($1)"
+}
+
+# Shows a banner on the display asking for a restart; in RAM, so the restart clears it
+reboot_banner() {
+	mkdir -p /run/dropstopnshop
+	printf 'window.STATUS = {"reboot": true, "lang": "%s"};\n' "$UI_LANG" >/run/dropstopnshop/status.js
+	chmod 644 /run/dropstopnshop/status.js
+}
+
+# --update [BRANCH]: update by hand over SSH
+update_by_hand() {
+	need_root --update
+	local app branch dir
+	load_install
+	branch=${1:-$(current_branch)}
+	dir=$(mktemp -d)
+	trap 'rm -rf "$dir"' EXIT
+	step "$(t "Lade die neueste Version" "Downloading the latest version") ($branch)"
+	fetch_setup "$branch" "$dir/setup.sh" || exit 1
+	if cmp -s "$dir/setup.sh" "$app/setup.sh"; then
+		t "Schon auf dem neuesten Stand – installiere trotzdem noch einmal." \
+			"Already up to date – installing it again anyway."
+		echo
+	fi
+	t "Bitte den Strom nicht abschalten, bis das Update fertig ist." \
+		"Please don't switch off the power until the update is done."
 	echo
-	echo "$(t Programm Program): $app"
-	echo "$(t "Protokolle" "Logs"):  journalctl -u dropstopnshop-sync   journalctl -u dropstopnshop-kiosk"
+	bash "$dir/setup.sh" --apply-update "$branch" || exit 1
 	if confirm "$(t "Jetzt neu starten?" "Reboot now?")" y; then
-		reboot
+		systemctl reboot
+	else
+		systemctl restart dropstopnshop-kiosk.service || true
+	fi
+}
+
+# --auto-update BRANCH: started in the background by the sync job when settings.json says
+# "update": true. Installs a new version if there is one, then restarts the Pi; if it can't,
+# the display shows a banner asking for a restart. Log: journalctl -u dropstopnshop-update
+auto_update() {
+	need_root
+	local app dir=/run/dropstopnshop/update
+	load_install
+	rm -rf "$dir"
+	mkdir -p "$dir"
+	fetch_setup "$1" "$dir/setup.sh" || exit 1
+	if cmp -s "$dir/setup.sh" "$app/setup.sh"; then
+		echo "$(t "Schon auf dem neuesten Stand" "Already up to date") ($1)"
+		exit 0
+	fi
+	echo "$(t "Neue Version gefunden, wird installiert" "New version found, installing") ($1) …"
+	if ! bash "$dir/setup.sh" --apply-update "$1"; then
+		t "Update fehlgeschlagen – die bisherige Version läuft weiter." \
+			"Update failed – the previous version keeps running."
+		echo
+		exit 1
+	fi
+	t "Starte neu …" "Restarting …"
+	echo
+	sleep 5  # let the log get out
+	if ! systemctl reboot; then
+		reboot_banner
+		systemctl restart dropstopnshop-kiosk.service || true
 	fi
 }
 
@@ -1190,6 +1583,7 @@ uninstall() {
 	confirm "$(t "Fortfahren?" "Continue?")" n || exit 0
 
 	systemctl disable --now dropstopnshop-kiosk.service dropstopnshop-sync.timer 2>/dev/null || true
+	systemctl stop dropstopnshop-update.service 2>/dev/null || true
 	rm -f /etc/systemd/system/dropstopnshop-kiosk.service \
 		/etc/systemd/system/dropstopnshop-sync.service /etc/systemd/system/dropstopnshop-sync.timer \
 		/etc/systemd/journald.conf.d/dropstopnshop.conf
@@ -1223,7 +1617,7 @@ uninstall() {
 check_status() {
 	need_root --check
 	load_lang
-	local app ssid
+	local app ssid last
 	app=$(installed_app)
 	if [ -z "$app" ] || ! grep -qs -- '--check' "$app/dropstopnshop-sync"; then
 		t "DropStopNShop ist nicht (oder in einer älteren Version) installiert. Bitte das Setup ausführen." \
@@ -1233,6 +1627,9 @@ check_status() {
 	fi
 	step "DropStopNShop – $(t Prüfung Check)"
 	echo "$(t Installationsordner "Install folder"): $app"
+	echo "$(t "Version von" "Version from"): $(current_branch) ($(t "aktualisieren" "update"): sudo bash $app/setup.sh --update)"
+	last=$(journalctl -u dropstopnshop-update -o cat -n 1 --no-pager 2>/dev/null | tail -n 1)
+	[ -n "$last" ] && echo "$(t "Letztes automatisches Update" "Last automatic update"): $last"
 	echo "$(t "Anzeige-Dienst" "Display service"): $(systemctl is-active dropstopnshop-kiosk.service)"
 	echo "$(t "Abgleich alle 3 Minuten" "Sync every 3 minutes"): $(systemctl is-active dropstopnshop-sync.timer)"
 	ssid=$(nmcli -t -f ACTIVE,SSID dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -n 1)
@@ -1252,9 +1649,12 @@ main() {
 	--preview) preview "${2:-}" ;;
 	--desktop) restore_desktop ;;
 	--uninstall) uninstall ;;
+	--update) update_by_hand "${2:-}" ;;
+	--auto-update) auto_update "${2:?branch missing}" ;;
+	--apply-update) apply_update "${2:?branch missing}" ;;
 	"") install_pi ;;
 	*)
-		sed -n '5,12p' "$SELF" 2>/dev/null || echo "Usage: sudo bash setup.sh [--uninstall | --desktop | --preview FOLDER]"
+		sed -n '5,14p' "$SELF" 2>/dev/null || echo "Usage: sudo bash setup.sh [--check | --update [BRANCH] | --uninstall | --desktop | --preview FOLDER]"
 		exit 1
 		;;
 	esac

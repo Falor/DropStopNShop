@@ -35,6 +35,11 @@ Leute ohne Technikinteresse, gebaut für die nächsten 10 Jahre und sparsam im S
 - **Ein Skript:** `setup.sh` richtet alles auf einem frischen Raspberry Pi OS ein. Es zeigt vorher,
   was es ändert, richtet bei Bedarf das WLAN ein, findet den Ordner auf der FRITZ!Box selbst,
   und `--uninstall` macht alles rückgängig.
+- **Einfache Updates:** `setup.sh --update` aktualisiert per SSH und behält alle Einstellungen.
+  Oder `"update": true` in die `settings.json` im Ordner schreiben, dann hält sich die Anzeige
+  selbst aktuell.
+- **Einstellungen im Ordner:** Sekunden pro Folie und das Auffüllen der Ränder lassen sich in der
+  `settings.json` neben den Folien ändern, ohne SSH.
 - **Deutsch oder Englisch** im Installer und in den Meldungen auf dem Bildschirm.
 
 ## Schnellstart
@@ -81,11 +86,48 @@ Laufwerk da ist: [Netzlaufwerk einbinden](docs/netzlaufwerk.md).
 
 Details zu Pfaden und Aufbau stehen im [englischen README](README.md#how-it-works).
 
+## Einstellungen im Ordner
+
+Im Anzeige-Ordner kann eine Datei `settings.json` liegen, mit den Einstellungen, die der Laden
+selbst ändern möchte, ganz ohne SSH. Fehlt sie, legt der Pi sie beim nächsten Abgleich mit den
+aktuellen Einstellungen an (und versucht es sonst stündlich wieder). Dafür braucht sein Benutzer
+Schreibrecht auf den Ordner; die Inhalte selbst liest er nur. Mit reinem Leserecht sagt `--check`
+das, und die Datei lässt sich von Hand aus `~/dropstopnshop/settings.example.json` hineinkopieren.
+Sie wird nie als Folie gezeigt.
+
+```json
+{
+  "slide_seconds": 12,
+  "fill_sides": true,
+  "update": false,
+  "update_branch": "main"
+}
+```
+
+| Eintrag | Bedeutung |
+|---|---|
+| `slide_seconds` | Sekunden pro Bild oder PDF-Seite (1–3600) |
+| `fill_sides` | `true` = Ränder neben den Folien mit den Farben am Rand auffüllen, `false` = schwarze Ränder |
+| `update` | `true` = die Anzeige hält sich selbst auf dem neuesten Stand |
+| `update_branch` | welcher Version sie folgt: `main` oder ein Branch dieses Repositorys zum Ausprobieren |
+
+Änderungen gelten ab dem nächsten Abgleich (spätestens nach 3 Minuten) und haben Vorrang vor
+`~/dropstopnshop/config`. Ist die Datei fehlerhaft, gelten die Werte aus der config, und `--check`
+zeigt, was nicht stimmt.
+
+Mit `"update": true` sucht der Pi nach jedem Start und alle 6 Stunden nach einer neuen Version.
+Gibt es eine, installiert er sie im Hintergrund (alle Einstellungen bleiben) und startet dann neu.
+Kann er nicht neu starten, zeigt der Bildschirm ein Banner mit der Bitte, ihn aus- und wieder
+einzuschalten. Protokoll: `journalctl -u dropstopnshop-update`. Wer in den Ordner schreiben darf,
+kann Updates einschalten, aber nur Versionen aus diesem Repository.
+
 ## Wartung
 
 | Aufgabe | Befehl (per SSH) |
 |---|---|
 | **Irgendwas stimmt nicht – was sieht die Anzeige?** | `sudo bash ~/dropstopnshop/setup.sh --check` |
+| **DropStopNShop aktualisieren** (alle Einstellungen bleiben) | `sudo bash ~/dropstopnshop/setup.sh --update` |
+| Die Version eines Branches ausprobieren | `sudo bash ~/dropstopnshop/setup.sh --update BRANCH` |
 | Was macht der Abgleich? | `journalctl -u dropstopnshop-sync` |
 | Sofort abgleichen | `sudo systemctl start dropstopnshop-sync` |
 | Was macht die Anzeige? | `journalctl -u dropstopnshop-kiosk` |

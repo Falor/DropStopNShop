@@ -54,6 +54,18 @@ Put `until` and the date (year-month-day) into the file name:
 
 From December 1st on, it disappears from the monitor by itself. The file stays in the folder.
 
+## Settings
+The `Display` folder contains a file `settings.json`. Open it with Notepad (right-click,
+"Open with"), change the value and save. The display picks it up within 3 minutes.
+
+- `"slide_seconds": 12` – how long each slide stays on screen, in seconds.
+- `"fill_sides": true` – `true` fills the edges next to slides that don't fit the screen with
+  matching colour, `false` leaves black bars.
+- `"update": false` – `true` lets the display update itself. It then restarts by itself once.
+
+Keep the quotes, colons and commas as they are. If the file is broken, the display keeps working
+with its normal settings.
+
 ## Switching on and off
 Just use the power socket. There's no need to shut down. After switching on, the display
 appears after about a minute.

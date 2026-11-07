@@ -33,6 +33,10 @@ who don't care about technology, built to still work in 10 years, and frugal wit
 - **One script:** `setup.sh` installs everything on a fresh Raspberry Pi OS. It shows what it
   will change before it starts, can set up Wi-Fi and find the folder on a FRITZ!Box, and
   `--uninstall` undoes it all.
+- **Easy updates:** `setup.sh --update` updates over SSH and keeps all settings. Or put
+  `"update": true` into `settings.json` in the folder, and the display keeps itself up to date.
+- **Settings in the folder:** seconds per slide and the filled sides can be changed in
+  `settings.json` next to the slides, no SSH needed.
 - **German or English** installer and screen messages.
 
 ## Quick start
@@ -80,7 +84,7 @@ the folder a permanent drive on the shop PC, see [network drive](docs/network-dr
   cut always leaves a complete state behind.
 - **Display:** After power-on, the systemd service `dropstopnshop-kiosk` starts
   [cage](https://github.com/cage-kiosk/cage) with Chromium in kiosk mode on `tty1`. It shows a
-  static HTML page that reloads the playlist after every round. If a desktop image was used, the
+  static HTML page that checks for a new playlist every 20 seconds. If a desktop image was used, the
   setup switches it to boot to the console.
 - **SD card:**
   - Logs and the browser profile live in RAM.
@@ -97,15 +101,52 @@ in the current directory, e.g. `~/dropstopnshop`. You can edit everything there 
 | `~/dropstopnshop/fill-sides` | fills the sides of slides to the shape of the screen |
 | `~/dropstopnshop/setup.sh` | a copy of the installer |
 | `~/dropstopnshop/config` | language, folder name, share path, seconds per slide, screen size, fill sides |
+| `settings.json` in the display folder | settings the shop can change itself, win over `config` (see below) |
 | `~/dropstopnshop/data/` | prepared slides (`state-…`, symlink `current`, `cache/`), written by the sync job |
 | `/etc/dropstopnshop/share-credentials` | username and password for the share (root only) |
 | `/etc/dropstopnshop/location` | where the install folder is |
+| `/etc/dropstopnshop/branch` | which branch the last update came from |
+
+## Settings in the folder
+
+The display folder can hold a file `settings.json` with the settings the shop may want to change
+itself, without SSH. If it's missing, the Pi creates it with the current settings at the next
+sync (it tries again every hour). That needs a share user with write access; the content itself
+is only ever read. With a read-only user, `--check` says so, and the file can be copied in by hand
+from `~/dropstopnshop/settings.example.json`. It's never shown as a slide.
+
+```json
+{
+  "slide_seconds": 12,
+  "fill_sides": true,
+  "update": false,
+  "update_branch": "main"
+}
+```
+
+| Key | Meaning |
+|---|---|
+| `slide_seconds` | seconds per image or PDF page (1–3600) |
+| `fill_sides` | `true` = fill the bars next to slides with the colours at their edge, `false` = black bars |
+| `update` | `true` = keep the display up to date automatically |
+| `update_branch` | which version to follow: `main`, or a branch of this repository to try something out |
+
+Changes take effect with the next sync (within 3 minutes) and win over `~/dropstopnshop/config`.
+If the file can't be read, the config values are used and `--check` says what's wrong.
+
+With `"update": true` the Pi looks for a new version after every start and every 6 hours. If
+there is one, it installs it in the background (keeping all settings), then restarts itself. If it
+can't restart, the screen shows a banner asking to switch it off and on again. Log:
+`journalctl -u dropstopnshop-update`. Anyone who can write to the folder can switch updates on,
+but only to versions from this repository.
 
 ## Maintenance
 
 | Task | Command (via SSH) |
 |---|---|
 | **Something's wrong – what does the display see?** | `sudo bash ~/dropstopnshop/setup.sh --check` |
+| **Update DropStopNShop** (keeps all settings) | `sudo bash ~/dropstopnshop/setup.sh --update` |
+| Try the version of a branch | `sudo bash ~/dropstopnshop/setup.sh --update BRANCH` |
 | What is the sync doing? | `journalctl -u dropstopnshop-sync` |
 | Sync right now | `sudo systemctl start dropstopnshop-sync` |
 | What is the display doing? | `journalctl -u dropstopnshop-kiosk` |
