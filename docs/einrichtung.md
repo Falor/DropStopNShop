@@ -139,6 +139,13 @@ neu starten?“ mit Enter antworten.
    oder ein PDF davon in den Ordner `Bildschirm` speichern.
 2. Höchstens 3 Minuten warten, dann erscheint sie auf dem Monitor.
 
+Das Setup legt außerdem eine Datei `settings.json` in den Ordner (wenn der Pi dort schreiben
+darf). Damit lassen sich später die Sekunden pro Folie ändern und automatische Updates
+einschalten, siehe [Bedienungsanleitung](bedienung.md#einstellungen).
+
+**Später aktualisieren:** per SSH verbinden (Schritt 4) und `sudo bash ~/dropstopnshop/setup.sh --update`
+eingeben. Alle Einstellungen bleiben, wie sie sind.
+
 Fertig! Wie man im Alltag Inhalte ändert, steht in der [Bedienungsanleitung](bedienung.md).
 Die kannst du ausdrucken und neben den PC hängen.
 

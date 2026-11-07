@@ -55,6 +55,19 @@ Schreib `bis` und das Datum in den Dateinamen:
 
 Ab dem 1.12. verschwindet es von selbst vom Monitor. Die Datei bleibt trotzdem im Ordner.
 
+## Einstellungen
+Im Ordner `Bildschirm` liegt die Datei `settings.json`. Mit dem Editor öffnen (Rechtsklick,
+„Öffnen mit“), den Wert ändern und speichern. Die Anzeige übernimmt das innerhalb von 3 Minuten.
+
+- `"slide_seconds": 12` – wie lange jede Folie zu sehen ist, in Sekunden.
+- `"fill_sides": true` – `true` füllt die Ränder neben Folien, die nicht aufs Bild passen, mit
+  passender Farbe, `false` lässt schwarze Ränder.
+- `"update": false` – `true` lässt die Anzeige sich selbst aktualisieren. Sie startet dann
+  einmal von selbst neu.
+
+Anführungszeichen, Doppelpunkte und Kommas so lassen. Ist die Datei kaputt, läuft die Anzeige
+mit ihren normalen Einstellungen weiter.
+
 ## Ein- und Ausschalten
 Einfach über die Steckdose. Herunterfahren ist nicht nötig. Nach dem Einschalten dauert es etwa
 eine Minute, bis die Anzeige kommt.

@@ -130,6 +130,13 @@ sync, e.g. "Done: 0 slides" while the folder is still empty. Answer "Reboot now?
    of it, into the `Display` folder.
 2. Wait 3 minutes at most, and it appears on the monitor.
 
+The setup also puts a file `settings.json` into the folder (if the Pi may write there). With it
+you can change the seconds per slide and switch on automatic updates later, see the
+[user guide](user-guide.md#settings).
+
+**Updating later:** connect via SSH (step 4) and type `sudo bash ~/dropstopnshop/setup.sh --update`.
+All settings stay as they are.
+
 Done! How to change content day to day is explained in the [user guide](user-guide.md). Print it
 and put it next to the PC.
 
