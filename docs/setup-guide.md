@@ -126,8 +126,8 @@ sync, e.g. "Done: 0 slides" while the folder is still empty. Answer "Reboot now?
 
 ## Step 6: Try it
 
-1. Make a presentation in **LibreOffice Impress** (or PowerPoint, Canva, …) and save it as a PDF
-   into the `Display` folder.
+1. Make a presentation in **PowerPoint** (or LibreOffice Impress, Canva, …) and save it, or a PDF
+   of it, into the `Display` folder.
 2. Wait 3 minutes at most, and it appears on the monitor.
 
 Done! How to change content day to day is explained in the [user guide](user-guide.md). Print it

@@ -135,8 +135,8 @@ neu starten?“ mit Enter antworten.
 
 ## Schritt 6: Ausprobieren
 
-1. Eine Präsentation in **LibreOffice Impress** (oder PowerPoint, Canva …) erstellen und als PDF
-   in den Ordner `Bildschirm` speichern.
+1. Eine Präsentation in **PowerPoint** (oder LibreOffice Impress, Canva …) erstellen und sie
+   oder ein PDF davon in den Ordner `Bildschirm` speichern.
 2. Höchstens 3 Minuten warten, dann erscheint sie auf dem Monitor.
 
 Fertig! Wie man im Alltag Inhalte ändert, steht in der [Bedienungsanleitung](bedienung.md).
