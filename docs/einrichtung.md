@@ -28,7 +28,8 @@ Die Anzeige holt sich ihre Inhalte aus einem Ordner im Netzwerk. Wähle **eine**
 3. **System → FRITZ!Box-Benutzer → Benutzer hinzufügen**:
    - Name z. B. `anzeige`, mit sicherem Passwort.
    - Haken bei **„Zugang zu NAS-Inhalten“**.
-   - Wenn möglich nur **Leserecht** geben.
+   - **Lese- und Schreibrecht** geben: Dann legt der Pi im Ordner die Datei `settings.json` für
+     die Einstellungen an. Die Inhalte selbst liest er nur.
    Diesen Benutzer verwendet der Pi.
 4. Am Windows-PC den Explorer öffnen und oben in die Adresszeile eintippen:
    `\\fritz.box\FRITZ.NAS`. Mit Enter bestätigen und mit deinem normalen FRITZ!Box-Konto anmelden.
@@ -40,7 +41,7 @@ Den Pfad musst du dir nicht merken: Das Setup findet die FRITZ!Box und den Ordne
 [Netzlaufwerk dauerhaft einbinden](netzlaufwerk.md).
 
 ### B) NAS (Synology, QNAP, …)
-Lege einen freigegebenen Ordner an, z. B. `Bildschirm`, und einen Benutzer mit Leserecht darauf.
+Lege einen freigegebenen Ordner an, z. B. `Bildschirm`, und einen Benutzer mit Lese- und Schreibrecht darauf (damit der Pi `settings.json` anlegen kann).
 Der Pfad sieht dann so aus: `\\nas\Freigabe\Bildschirm`.
 
 ### C) Windows-PC
@@ -139,8 +140,7 @@ neu starten?“ mit Enter antworten.
    oder ein PDF davon in den Ordner `Bildschirm` speichern.
 2. Höchstens 3 Minuten warten, dann erscheint sie auf dem Monitor.
 
-Das Setup legt außerdem eine Datei `settings.json` in den Ordner (wenn der Pi dort schreiben
-darf). Damit lassen sich später die Sekunden pro Folie ändern und automatische Updates
+Wenige Minuten nach dem Start legt der Pi außerdem eine Datei `settings.json` in den Ordner. Damit lassen sich später die Sekunden pro Folie ändern und automatische Updates
 einschalten, siehe [Bedienungsanleitung](bedienung.md#einstellungen).
 
 **Später aktualisieren:** per SSH verbinden (Schritt 4) und `sudo bash ~/dropstopnshop/setup.sh --update`

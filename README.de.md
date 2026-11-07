@@ -89,8 +89,10 @@ Details zu Pfaden und Aufbau stehen im [englischen README](README.md#how-it-work
 ## Einstellungen im Ordner
 
 Im Anzeige-Ordner kann eine Datei `settings.json` liegen, mit den Einstellungen, die der Laden
-selbst ändern möchte, ganz ohne SSH. Das Setup legt sie dort ab, wenn es in den Ordner schreiben
-darf, sonst zeigt es den Inhalt zum Kopieren an (auch in `~/dropstopnshop/settings.example.json`).
+selbst ändern möchte, ganz ohne SSH. Fehlt sie, legt der Pi sie beim nächsten Abgleich mit den
+aktuellen Einstellungen an (und versucht es sonst stündlich wieder). Dafür braucht sein Benutzer
+Schreibrecht auf den Ordner; die Inhalte selbst liest er nur. Mit reinem Leserecht sagt `--check`
+das, und die Datei lässt sich von Hand aus `~/dropstopnshop/settings.example.json` hineinkopieren.
 Sie wird nie als Folie gezeigt.
 
 ```json

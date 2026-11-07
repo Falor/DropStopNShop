@@ -110,8 +110,10 @@ in the current directory, e.g. `~/dropstopnshop`. You can edit everything there 
 ## Settings in the folder
 
 The display folder can hold a file `settings.json` with the settings the shop may want to change
-itself, without SSH. The setup puts it there if the share is writable, otherwise it prints the
-content to copy (also in `~/dropstopnshop/settings.example.json`). It's never shown as a slide.
+itself, without SSH. If it's missing, the Pi creates it with the current settings at the next
+sync (it tries again every hour). That needs a share user with write access; the content itself
+is only ever read. With a read-only user, `--check` says so, and the file can be copied in by hand
+from `~/dropstopnshop/settings.example.json`. It's never shown as a slide.
 
 ```json
 {

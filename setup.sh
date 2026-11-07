@@ -240,7 +240,7 @@ fi
 
 cleanup() {
 	local m
-	for m in "$RUN_DIR/usb" "$RUN_DIR/share"; do
+	for m in "$RUN_DIR/usb" "$RUN_DIR/share" "$RUN_DIR/share-rw"; do
 		mountpoint -q "$m" 2>/dev/null && umount -l "$m"
 	done
 	rm -rf "$DATA_DIR/.new" "$DATA_DIR"/cache/.tmp-*
@@ -372,6 +372,40 @@ maybe_update() {
 	fi
 }
 
+# No settings.json in the network folder yet: the Pi puts one there with the current settings,
+# so the shop finds it next to the slides. Needs write access to the folder; tried at most once
+# an hour. The result is kept for --check in $RUN_DIR/settings-created.
+create_settings() {
+	local m="$RUN_DIR/share-rw" now last=0 branch result
+	now=$(cut -d. -f1 /proc/uptime)
+	[ -r "$RUN_DIR/settings-tried" ] && read -r last <"$RUN_DIR/settings-tried"
+	((last > 0 && last <= now && now - last < 3600)) && return
+	echo "$now" >"$RUN_DIR/settings-tried"
+	branch=$(cat /etc/dropstopnshop/branch 2>/dev/null || echo main)
+	mkdir -p "$m"
+	if ! timeout 40 mount -t cifs "$SHARE" "$m" \
+		-o "rw,credentials=$SHARE_CREDENTIALS,iocharset=utf8,soft,noserverino" 2>/dev/null; then
+		result=readonly
+	elif find "$m" -maxdepth 1 -iname settings.json | grep -q .; then
+		result=ok
+	elif printf '{\n  "slide_seconds": %d,\n  "fill_sides": %s,\n  "update": false,\n  "update_branch": "%s"\n}\n' \
+		"$SLIDE_SECONDS" "$([ "$FILL_SIDES" = no ] && echo false || echo true)" "$branch" \
+		>"$m/settings.json" 2>/dev/null; then
+		result=ok
+		echo "$(t "settings.json im Netzwerkordner angelegt" "Created settings.json in the network folder")"
+	else
+		rm -f "$m/settings.json" 2>/dev/null
+		result=readonly
+	fi
+	mountpoint -q "$m" && { umount "$m" || umount -l "$m"; }
+	echo "$result" >"$RUN_DIR/settings-created"
+	if [ "$result" = readonly ]; then
+		t "settings.json kann nicht angelegt werden: Der Benutzer des Pi darf im Netzwerkordner nicht schreiben." \
+			"Can't create settings.json: the Pi's user may not write to the network folder."
+		echo
+	fi
+}
+
 json_str() {
 	local s=${1//\\/\\\\}
 	printf '"%s"' "${s//\"/\\\"}"
@@ -439,6 +473,9 @@ if [ -n "$settings" ]; then
 		SETTINGS_ERROR="python3 $(t fehlt "is missing")"
 	fi
 fi
+if [ -z "$settings" ] && [ "$src" = "$RUN_DIR/share" ] && ! $CHECK; then
+	create_settings
+fi
 if [ -n "$SETTINGS_ERROR" ]; then
 	echo "settings.json: $(t "Fehler, Rest wird benutzt" "error, using the rest") – $SETTINGS_ERROR"
 fi
@@ -478,6 +515,16 @@ if $CHECK; then
 			echo "$(t "Einstellungen aus" "Settings from") settings.json:"
 		else
 			echo "$(t "Einstellungen (keine settings.json im Ordner)" "Settings (no settings.json in the folder)"):"
+			if [ "$src" != "$RUN_DIR/share" ]; then
+				:
+			elif [ "$(cat "$RUN_DIR/settings-created" 2>/dev/null)" = readonly ]; then
+				echo "  $(t "Der Pi kann sie nicht anlegen: Sein Benutzer darf im Netzwerkordner nicht schreiben." \
+					"The Pi can't create it: its user may not write to the network folder.")"
+				echo "  $(t "Schreibrecht geben (oder die Datei von Hand anlegen)." \
+					"Give it write access (or create the file by hand).")"
+			else
+				echo "  $(t "Der nächste Abgleich legt sie an." "The next sync creates it.")"
+			fi
 		fi
 		echo "  $(t "Sekunden pro Folie" "seconds per slide"): $SLIDE_SECONDS"
 		echo "  $(t "Ränder auffüllen" "fill the sides"): $FILL_SIDES"
@@ -938,8 +985,10 @@ setup_wifi() {
 
 ask_credentials() {
 	local user pass
-	t "Benutzer mit Zugriff auf den Netzwerkordner (am besten nur Leserecht)." \
-		"A user with access to the network folder (read-only is best)."
+	t "Benutzer mit Zugriff auf den Netzwerkordner. Mit Schreibrecht legt der Pi dort die Datei
+settings.json für die Einstellungen an; die Inhalte selbst liest er nur." \
+		"A user with access to the network folder. With write access the Pi puts the file
+settings.json for the settings there; the content itself it only reads."
 	echo
 	ask user "$(t Benutzername Username)" ""
 	read -r -s -p "$(t Passwort Password): " pass </dev/tty || true

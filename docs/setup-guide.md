@@ -25,7 +25,8 @@ The display gets its content from a folder on the network. Pick **one** option:
 ### A) Router with USB storage (e.g. FRITZ!Box)
 Many routers can share a plugged-in USB drive on the network.
 1. Enable the storage sharing (SMB/NAS) in the router's web interface.
-2. Create a user for the Pi with **read-only** access.
+2. Create a user for the Pi with **read and write** access. The Pi then puts the file
+   `settings.json` for the settings into the folder; the content itself it only reads.
 3. On the Windows PC, open File Explorer and type the router's share into the address bar, e.g.
    `\\fritz.box\FRITZ.NAS`.
 4. Open the drive and create a new folder **`Display`**.
@@ -37,7 +38,7 @@ Many routers can share a plugged-in USB drive on the network.
 [map the folder permanently](network-drive.md).
 
 ### B) NAS (Synology, QNAP, …)
-Create a shared folder, e.g. `Display`, and a user with read access to it. The path then looks
+Create a shared folder, e.g. `Display`, and a user with read and write access to it (so the Pi can create `settings.json`). The path then looks
 like `\\nas\share\Display`.
 
 ### C) Windows PC
@@ -130,7 +131,7 @@ sync, e.g. "Done: 0 slides" while the folder is still empty. Answer "Reboot now?
    of it, into the `Display` folder.
 2. Wait 3 minutes at most, and it appears on the monitor.
 
-The setup also puts a file `settings.json` into the folder (if the Pi may write there). With it
+A few minutes after the start, the Pi also puts a file `settings.json` into the folder. With it
 you can change the seconds per slide and switch on automatic updates later, see the
 [user guide](user-guide.md#settings).
 
